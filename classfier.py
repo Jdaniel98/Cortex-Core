@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
 from src.tokenizer import Tokenizer
 from src.activation import ReLU, Softmax
 from src.vectorizer import BuildVectors
@@ -10,71 +12,96 @@ from src.linear import Linear
 from src.loss import Loss
 
 def matmul(input1, input2):
-    m1, n1 = input1.shape
-    m2, n2 = input2.shape
-    result = np.zeros((m1, n2))
-    for i in range(m1):
-        for j in range(n2):
-            for k in range(n1):
-                result[i, j] += input1[i, k] * input2[k, j]
+    return np.dot(input1, input2)
 
-    return result
-class BuildClassifier:
+class BuildClassifier(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
-        self.hidden = Linear(input_size, hidden_size)
-        self.relu = ReLU()
-        self.output = Linear(hidden_size, output_size)
-        self.softmax = Softmax(dim=1)
-        self.loss = Loss.mean_squared_error
+        super(BuildClassifier, self).__init__()
+        self.hidden = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.output = nn.Linear(hidden_size, output_size)
+        self.softmax = nn.Softmax(dim=1)
+        self.loss_fn = nn.CrossEntropyLoss()
 
-    def forward_prop(self, x):
-        hidden = self.relu(self.hidden.forward(x))
-        output = self.softmax.forward(self.output.forward(hidden))
+    def forward(self, x):
+        hidden = self.relu(self.hidden(x))
+        output = self.output(hidden)
         return output
 
-    def train(self, x, y, learning_rate=0.1, num_epochs=10):
+    def train_model(self, x, y, learning_rate=0.01, num_epochs=50, batch_size=32):
+        optimizer = optim.Adam(self.parameters(), lr=learning_rate)
+        
         for epoch in range(num_epochs):
-            print(f"Epoch: {epoch}")
-            output = self.forward_prop(x)
-            loss = self.loss(output, y)
-            grad_output = self.softmax.backward(output - y)
-            grad_hidden = self.output.backward_prop(grad_output, learning_rate)
-            grad_input = self.hidden.backward(grad_hidden, learning_rate)
+            self.train()
+            total_loss = 0
+            for i in range(0, len(x), batch_size):
+                batch_x = torch.tensor(x[i:i+batch_size], dtype=torch.float32)
+                batch_y = torch.tensor(y[i:i+batch_size], dtype=torch.long)
+                
+                optimizer.zero_grad()
+                outputs = self(batch_x)
+                loss = self.loss_fn(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+                
+                total_loss += loss.item()
             
-            print(f"Loss: {loss}")
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch: {epoch+1}/{num_epochs}, Loss: {total_loss/len(x):.4f}")
+
     def predict(self, x):
-        output = self.forward(x)
-        return np.argmax(output, axis=1)
+        self.eval()
+        with torch.no_grad():
+            x = torch.tensor(x, dtype=torch.float32)
+            outputs = self(x)
+            _, predicted = torch.max(outputs, 1)
+        return predicted.numpy()
 
-def shape(array):
-    if isinstance(array, list):
-        return (len(array),) + shape(array[0])
-    else:
-        return ()
+def load_and_preprocess_data(file_path):
+    df = pd.read_csv(file_path)
+    df = df.dropna()
+    return df['text'], df['sentiment']
 
-df = pd.read_csv('./data/twitter_training.csv')
-df = df.dropna()
-text_data = df['text']
-sentiment_data = df['sentiment']
-label_encoder = Tokenizer()
-sentiment_labels = label_encoder.fit_tokenize(sentiment_data)
-vectorizer = BuildVectors()
-vectorizer.fit(text_data)
-print(vectorizer.vocab_store['coming'])
-train_vectors =vectorizer.transform(text_data[0:10])
+def main():
+    # Load and preprocess data
+    text_data, sentiment_data = load_and_preprocess_data('./data/twitter_training.csv')
 
+    # Encode labels
+    label_encoder = Tokenizer()
+    sentiment_labels = label_encoder.fit_tokenize(sentiment_data)
 
-input_size = shape(train_vectors)[1]
-hidden_size = 64
-output_size = len(label_encoder.classes)  
+    # Vectorize text data
+    vectorizer = BuildVectors()
+    vectorizer.fit(text_data)
+    vectors = vectorizer.transform(text_data)
 
-model = BuildClassifier(input_size, hidden_size, output_size)
-model.train(train_vectors, sentiment_labels)
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(vectors, sentiment_labels, test_size=0.2, random_state=42)
 
+    # Initialize and train model
+    input_size = X_train.shape[1]
+    hidden_size = 64
+    output_size = len(label_encoder.classes)
+    model = BuildClassifier(input_size, hidden_size, output_size)
+    model.train_model(X_train, y_train)
 
-def run_prediction(model, text):
-    text_vector = vectorizer.transform([text])
-    _, predicted_index = torch.max(model.predict(text_vector), 1)
-    predicted_label = label_encoder.inverse_transform(predicted_index.numpy())[0]
-    return predicted_label
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"Accuracy: {accuracy:.4f}")
+    print(classification_report(y_test, y_pred, target_names=label_encoder.classes))
+
+    # Example prediction
+    def run_prediction(text):
+        text_vector = vectorizer.transform([text])
+        predicted_index = model.predict(text_vector)[0]
+        predicted_label = label_encoder.inverse_transform([predicted_index])[0]
+        return predicted_label
+
+    example_text = "I love this product! It's amazing!"
+    print(f"Prediction for '{example_text}': {run_prediction(example_text)}")
+
+if __name__ == "__main__":
+    main()
+
 
