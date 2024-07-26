@@ -16,25 +16,25 @@ Recursive Neural Network
 ```python
 import torch
 import torch.nn as nn
-from src.tokenizer import Tokenizer
-from src.activation import ReLU, Softmax
-from src.vectorizer import BuildVectors
-from src.linear import Linear
-from src.loss import Loss
+
 from src.preprocessing import Embedding
+from src.linear import Linear
+from src.activation import ReLU
 
 class RNN(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim):
         super(RNN, self).__init__()
         self.embedding = Embedding(vocab_size, embedding_dim)
-        self.rnn = RNN(embedding_dim, hidden_dim)
+        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True)
         self.fc = Linear(hidden_dim, output_dim)
         self.activation = ReLU()
 
-    def forward_prop(self, text):
+    def forward(self, text, hidden=None):
         embedded = self.embedding(text)
-        output, hidden = self.rnn(embedded)
-        output = self.activation(output)
-        output = self.fc(output)
-        return output
+        output, hidden = self.rnn(embedded, hidden)
+        output = self.fc(output[:, -1, :])  # Use the last output for classification
+        return self.activation(output), hidden
+
+    def init_hidden(self, batch_size):
+        return torch.zeros(1, batch_size, self.rnn.hidden_size)
 ```
